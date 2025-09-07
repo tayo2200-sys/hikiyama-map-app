@@ -52,9 +52,9 @@ function BasemapToggle({ type, onToggle }: { type: "osm" | "sat"; onToggle: () =
 function FlyTo({ center, zoom }: { center: { lat: number; lng: number }; zoom: number }) {
   const map = useMap();
   useEffect(() => {
-    // map が取得できた後に flyTo
     if (!map) return;
-    map.flyTo(center, zoom, { duration: 0.7 });
+    // center オブジェクトを直接渡さず、配列 [lat, lng] を使う
+    map.flyTo([center.lat, center.lng], zoom, { duration: 0.7 });
   }, [map, center.lat, center.lng, zoom]);
   return null;
 }
