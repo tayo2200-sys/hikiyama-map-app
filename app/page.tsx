@@ -9,22 +9,24 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { MapPin, Satellite, RefreshCcw, Play, Square } from "lucide-react";
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
-import L from "leaflet";
+import L, { LatLngExpression, Marker as LMarker, DragEndEvent } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { motion } from "framer-motion";
 
 import { initializeApp, getApps } from "firebase/app";
 import { getFirestore, doc, onSnapshot, setDoc, serverTimestamp } from "firebase/firestore";
 
+// ⚠️ 必要なら env 方式に差し替えてください（Vercel の環境変数を利用）
 const firebaseConfig = {
   apiKey: "AIzaSyCKHQoavsNA68ge4g6FfaT92H3p4184VHk",
   authDomain: "hikiyama-map.firebaseapp.com",
   projectId: "hikiyama-map",
-  storageBucket: "hikiyama-map.appspot.com", // Storage を使う場合はこちらが一般的
+  storageBucket: "hikiyama-map.firebasestorage.app",
   messagingSenderId: "542550449015",
   appId: "1:542550449015:web:cfdce8580620d4434b1f72",
-  measurementId: "G-00WFHBG1F4",
+  measurementId: "G-00WFHBG1F4"
 };
+
 function useFirebase() {
   const app = useMemo(() => (getApps().length ? getApps()[0] : initializeApp(firebaseConfig)), []);
   const db = useMemo(() => getFirestore(app), [app]);
@@ -50,8 +52,10 @@ function BasemapToggle({ type, onToggle }: { type: "osm" | "sat"; onToggle: () =
 function FlyTo({ center, zoom }: { center: { lat: number; lng: number }; zoom: number }) {
   const map = useMap();
   useEffect(() => {
+    // map が取得できた後に flyTo
+    if (!map) return;
     map.flyTo(center, zoom, { duration: 0.7 });
-  }, [center.lat, center.lng, zoom]);
+  }, [map, center.lat, center.lng, zoom]);
   return null;
 }
 
@@ -90,27 +94,42 @@ type FloatDoc = {
   name: string;
   lat?: number;
   lng?: number;
-  speed?: number;
-  heading?: number;
-  angleDeg?: number;
-  updatedAt?: number;
-  battery?: number;
-  device?: string;
+  speed?: number | null;
+  heading?: number | null;
+  angleDeg?: number | null;
+  updatedAt?: number | null;
+  battery?: number | null;
+  device?: string | null;
 };
+
+// Firestore から取得する生データの型（any を使わない）
+type FloatDocFS = {
+  lat?: number;
+  lng?: number;
+  speed?: number | null;
+  heading?: number | null;
+  angleDeg?: number | null;
+  updatedAt?: { toMillis?: () => number } | number | null;
+  battery?: number | null;
+  device?: string | null;
+} | undefined;
 
 export default function Page() {
   const { db } = useFirebase();
-  const [floats, setFloats] = useState<Record<string, FloatDoc>>(() => Object.fromEntries(FLOAT_IDS.map((id, i) => [id, { id, name: FLOAT_NAMES[i] }])));
+  const [floats, setFloats] = useState<Record<string, FloatDoc>>(() =>
+    Object.fromEntries(FLOAT_IDS.map((id, i) => [id, { id, name: FLOAT_NAMES[i] }]))
+  );
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [basemap, setBasemap] = useState<"osm" | "sat">("osm");
   const [center, setCenter] = useState(KAKUNODATE_CENTER);
   const [zoom, setZoom] = useState(DEFAULT_ZOOM);
   const [editMove, setEditMove] = useState(false);
 
+  // Firestore リアルタイム購読
   useEffect(() => {
     const unsubs = FLOAT_IDS.map((id, idx) =>
       onSnapshot(doc(db, "floats", id), (snap) => {
-        const d = snap.data() as any;
+        const d = snap.data() as FloatDocFS;
         setFloats((prev) => ({
           ...prev,
           [id]: {
@@ -118,12 +137,16 @@ export default function Page() {
             name: FLOAT_NAMES[idx],
             lat: d?.lat,
             lng: d?.lng,
-            speed: d?.speed,
-            heading: d?.heading,
-            angleDeg: d?.angleDeg,
-            updatedAt: d?.updatedAt?.toMillis ? d.updatedAt.toMillis() : d?.updatedAt,
-            battery: d?.battery,
-            device: d?.device,
+            speed: d?.speed ?? null,
+            heading: d?.heading ?? null,
+            angleDeg: d?.angleDeg ?? null,
+            updatedAt: typeof d?.updatedAt === "number"
+              ? d?.updatedAt
+              : d?.updatedAt && typeof d.updatedAt === "object" && "toMillis" in d.updatedAt && typeof d.updatedAt.toMillis === "function"
+                ? d.updatedAt.toMillis()
+                : null,
+            battery: d?.battery ?? null,
+            device: d?.device ?? null,
           },
         }));
       })
@@ -149,7 +172,7 @@ export default function Page() {
               <CardHeader className="flex flex-row items-center justify-between py-3">
                 <CardTitle className="text-lg">マップ</CardTitle>
                 <div className="flex gap-2">
-                  <Button variant={editMove ? "default" : "outline"} className="gap-2" onClick={() => setEditMove(v=>!v)}>
+                  <Button variant={editMove ? "default" : "outline"} className="gap-2" onClick={() => setEditMove(v => !v)}>
                     {editMove ? "位置移動：ON（ドラッグで駒を移動）" : "位置移動：OFF"}
                   </Button>
                   <Button variant="outline" className="gap-2" onClick={() => { setCenter(KAKUNODATE_CENTER); setZoom(DEFAULT_ZOOM); }}>
@@ -164,38 +187,49 @@ export default function Page() {
                   <MapContainer center={center} zoom={zoom} scrollWheelZoom className="h-full w-full z-0">
                     <FlyTo center={center} zoom={zoom} />
                     {basemap === "osm" ? (
-                      <TileLayer attribution='&copy; OSM' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                      <TileLayer attribution="&copy; OSM" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
                     ) : (
-                      <TileLayer attribution='&copy; Imagery providers' url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" />
+                      <TileLayer
+                        attribution="&copy; Imagery providers"
+                        url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                      />
                     )}
 
                     {FLOAT_IDS.map((id, idx) => {
                       const f = floats[id];
-                      if (!f?.lat || !f?.lng) return null;
-                      const angle = (f?.angleDeg ?? (Number.isFinite(f?.heading) ? (f!.heading as number) : 0));
+                      if (f.lat == null || f.lng == null) return null;
+                      const angle = f.angleDeg ?? (Number.isFinite(f.heading) ? (f.heading as number) : 0);
+                      const pos: LatLngExpression = [f.lat, f.lng];
+
+                      const onClickMarker = () => {
+                        setSelectedId(id);
+                        setCenter({ lat: f.lat!, lng: f.lng! });
+                        setZoom(17);
+                      };
+
+                      const onDragEnd = async (e: DragEndEvent) => {
+                        if (!(editMove && selectedId === id)) return;
+                        const marker = e.target as LMarker;
+                        const ll = marker.getLatLng();
+                        await setDoc(
+                          doc(db, "floats", id),
+                          { lat: ll.lat, lng: ll.lng, updatedAt: serverTimestamp() },
+                          { merge: true }
+                        );
+                      };
+
                       return (
                         <Marker
                           key={id}
-                          position={[f.lat, f.lng] as any}
+                          position={pos}
                           icon={createShogiIcon(FLOAT_NAMES[idx], angle)}
-                          draggable={editMove && selectedId===id}
-                          eventHandlers={{
-                            click: () => {
-                              setSelectedId(id);
-                              setCenter({ lat: f.lat!, lng: f.lng! });
-                              setZoom(17);
-                            },
-                            dragend: async (e: any) => {
-                              if (!(editMove && selectedId===id)) return;
-                              const ll = e.target.getLatLng();
-                              await setDoc(doc(db, "floats", id), { lat: ll.lat, lng: ll.lng, updatedAt: serverTimestamp() }, { merge: true });
-                            }
-                          }}
+                          draggable={editMove && selectedId === id}
+                          eventHandlers={{ click: onClickMarker, dragend: onDragEnd }}
                         >
                           <Popup>
                             <div className="text-sm">
                               <div className="font-semibold mb-1">{f.name}</div>
-                              <RotateEditor id={id} db={db} current={f.angleDeg} fallbackHeading={f.heading} />
+                              <RotateEditor id={id} db={db} current={f.angleDeg ?? undefined} fallbackHeading={f.heading ?? undefined} />
                             </div>
                           </Popup>
                         </Marker>
@@ -220,16 +254,20 @@ function RotateEditor({ id, db, current, fallbackHeading }: { id: string; db: Re
   const [angle, setAngle] = useState<number>(current ?? Math.round(fallbackHeading ?? 0));
 
   async function save() {
-    await setDoc(doc(db, 'floats', id), { angleDeg: angle }, { merge: true });
+    await setDoc(doc(db, "floats", id), { angleDeg: angle }, { merge: true });
   }
+
+  const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setAngle(parseInt(e.target.value, 10));
+  };
 
   return (
     <div className="space-y-2">
-      <input type="range" min={-180} max={180} step={1} value={angle} onChange={(e) => setAngle(parseInt(e.target.value))} className="w-full" />
+      <input type="range" min={-180} max={180} step={1} value={angle} onChange={onChange} className="w-full" />
       <div className="flex items-center gap-2">
-        <Button variant="outline" onClick={() => setAngle((a)=>a-15)}>−15°</Button>
+        <Button variant="outline" onClick={() => setAngle((a) => a - 15)}>−15°</Button>
         <Button variant="outline" onClick={() => setAngle(0)}>0°</Button>
-        <Button variant="outline" onClick={() => setAngle((a)=>a+15)}>＋15°</Button>
+        <Button variant="outline" onClick={() => setAngle((a) => a + 15)}>＋15°</Button>
         <div className="text-sm ml-auto">{angle}°</div>
         <Button onClick={save}>保存</Button>
       </div>
@@ -263,15 +301,22 @@ function TrackerPanel({ db }: { db: ReturnType<typeof getFirestore> }) {
     await setDoc(doc(db, "floats", id), { device, updatedAt: serverTimestamp() }, { merge: true });
 
     watchIdRef.current = navigator.geolocation.watchPosition(
-      async (pos) => {
-        const { latitude, longitude, heading, speed } = pos.coords as any;
+      async (pos: GeolocationPosition) => {
+        const { latitude, longitude, heading, speed } = pos.coords;
         await setDoc(
           doc(db, "floats", id),
-          { lat: latitude, lng: longitude, heading: heading ?? null, speed: speed ?? null, device, updatedAt: serverTimestamp() },
+          {
+            lat: latitude,
+            lng: longitude,
+            heading: (typeof heading === "number" ? heading : null),
+            speed: (typeof speed === "number" ? speed : null),
+            device,
+            updatedAt: serverTimestamp(),
+          },
           { merge: true }
         );
       },
-      (err) => {
+      (err: GeolocationPositionError) => {
         console.error(err);
         alert("位置共有に失敗しました: " + err.message);
         stop();
@@ -312,12 +357,12 @@ function TrackerPanel({ db }: { db: ReturnType<typeof getFirestore> }) {
 
           <div>
             <div className="text-xs">端末名</div>
-            <Input value={device} onChange={(e) => setDevice(e.target.value)} />
+            <Input value={device} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setDevice(e.target.value)} />
           </div>
 
           <div>
             <div className="text-xs">パスコード</div>
-            <Input type="password" value={passcode} onChange={(e) => setPasscode(e.target.value)} />
+            <Input type="password" value={passcode} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setPasscode(e.target.value)} />
           </div>
         </div>
 
@@ -332,4 +377,3 @@ function TrackerPanel({ db }: { db: ReturnType<typeof getFirestore> }) {
     </Card>
   );
 }
-
