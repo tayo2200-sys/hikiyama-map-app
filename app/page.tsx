@@ -8,15 +8,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
 import { MapPin, Satellite, RefreshCcw, Play, Square } from "lucide-react";
-import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
-import L, { LatLngExpression, Marker as LMarker, DragEndEvent } from "leaflet";
-import "leaflet/dist/leaflet.css";
-import { motion } from "framer-motion";
+import dynamic from "next/dynamic";
 
 import { initializeApp, getApps } from "firebase/app";
 import { getFirestore, doc, onSnapshot, setDoc, serverTimestamp } from "firebase/firestore";
 
-// ⚠️ 必要なら env 方式に差し替えてください（Vercel の環境変数を利用）
+const MapView = dynamic(() => import("../components/MapView"), { ssr: false });
+
 const firebaseConfig = {
   apiKey: "AIzaSyCKHQoavsNA68ge4g6FfaT92H3p4184VHk",
   authDomain: "hikiyama-map.firebaseapp.com",
@@ -49,46 +47,6 @@ function BasemapToggle({ type, onToggle }: { type: "osm" | "sat"; onToggle: () =
   );
 }
 
-function FlyTo({ center, zoom }: { center: { lat: number; lng: number }; zoom: number }) {
-  const map = useMap();
-  useEffect(() => {
-    if (!map) return;
-    // center オブジェクトを直接渡さず、配列 [lat, lng] を使う
-    map.flyTo([center.lat, center.lng], zoom, { duration: 0.7 });
-  }, [map, center.lat, center.lng, zoom]);
-  return null;
-}
-
-function createShogiIcon(label: string, angleDeg: number = 0) {
-  return L.divIcon({
-    className: "custom-shogi-icon",
-    html: `
-      <div style="
-        width:44px;
-        height:50px;
-        background:#f9e4b7;
-        border:2px solid #000;
-        clip-path: polygon(20% 0%, 80% 0%, 100% 25%, 100% 100%, 0% 100%, 0% 25%);
-        display:flex;
-        align-items:center;
-        justify-content:center;
-        transform: rotate(${angleDeg}deg);
-      ">
-        <div style="
-          writing-mode: vertical-rl;
-          text-orientation: upright;
-          font-size:13px;
-          font-weight:700;
-          font-family:'Noto Sans JP', sans-serif;
-          line-height:1;
-          letter-spacing:1px;
-          user-select:none;
-          -webkit-user-select:none;
-        ">${label}</div>
-      </div>`
-  });
-}
-
 type FloatDoc = {
   id: string;
   name: string;
@@ -102,17 +60,18 @@ type FloatDoc = {
   device?: string | null;
 };
 
-// Firestore から取得する生データの型（any を使わない）
-type FloatDocFS = {
-  lat?: number;
-  lng?: number;
-  speed?: number | null;
-  heading?: number | null;
-  angleDeg?: number | null;
-  updatedAt?: { toMillis?: () => number } | number | null;
-  battery?: number | null;
-  device?: string | null;
-} | undefined;
+type FloatDocFS =
+  | {
+      lat?: number;
+      lng?: number;
+      speed?: number | null;
+      heading?: number | null;
+      angleDeg?: number | null;
+      updatedAt?: { toMillis?: () => number } | number | null;
+      battery?: number | null;
+      device?: string | null;
+    }
+  | undefined;
 
 export default function Page() {
   const { db } = useFirebase();
@@ -125,7 +84,6 @@ export default function Page() {
   const [zoom, setZoom] = useState(DEFAULT_ZOOM);
   const [editMove, setEditMove] = useState(false);
 
-  // Firestore リアルタイム購読
   useEffect(() => {
     const unsubs = FLOAT_IDS.map((id, idx) =>
       onSnapshot(doc(db, "floats", id), (snap) => {
@@ -140,9 +98,10 @@ export default function Page() {
             speed: d?.speed ?? null,
             heading: d?.heading ?? null,
             angleDeg: d?.angleDeg ?? null,
-            updatedAt: typeof d?.updatedAt === "number"
-              ? d?.updatedAt
-              : d?.updatedAt && typeof d.updatedAt === "object" && "toMillis" in d.updatedAt && typeof d.updatedAt.toMillis === "function"
+            updatedAt:
+              typeof d?.updatedAt === "number"
+                ? d?.updatedAt
+                : d?.updatedAt && typeof d.updatedAt === "object" && "toMillis" in d.updatedAt && typeof d.updatedAt.toMillis === "function"
                 ? d.updatedAt.toMillis()
                 : null,
             battery: d?.battery ?? null,
@@ -157,9 +116,7 @@ export default function Page() {
   return (
     <div className="min-h-screen w-full bg-gradient-to-b from-slate-50 to-white">
       <div className="max-w-7xl mx-auto p-4 sm:p-6">
-        <motion.h1 initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} className="text-2xl sm:text-3xl font-bold tracking-tight">
-          角館の祭典 曳山ライブマップ（MVP）
-        </motion.h1>
+        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">角館の祭典 曳山ライブマップ（MVP）</h1>
 
         <Tabs defaultValue="map" className="mt-4">
           <TabsList>
@@ -172,7 +129,7 @@ export default function Page() {
               <CardHeader className="flex flex-row items-center justify-between py-3">
                 <CardTitle className="text-lg">マップ</CardTitle>
                 <div className="flex gap-2">
-                  <Button variant={editMove ? "default" : "outline"} className="gap-2" onClick={() => setEditMove(v => !v)}>
+                  <Button variant={editMove ? "default" : "outline"} className="gap-2" onClick={() => setEditMove((v) => !v)}>
                     {editMove ? "位置移動：ON（ドラッグで駒を移動）" : "位置移動：OFF"}
                   </Button>
                   <Button variant="outline" className="gap-2" onClick={() => { setCenter(KAKUNODATE_CENTER); setZoom(DEFAULT_ZOOM); }}>
@@ -184,58 +141,21 @@ export default function Page() {
               <Separator />
               <CardContent className="p-0">
                 <div className="h-[72vh] w-full">
-                  <MapContainer center={center} zoom={zoom} scrollWheelZoom className="h-full w-full z-0">
-                    <FlyTo center={center} zoom={zoom} />
-                    {basemap === "osm" ? (
-                      <TileLayer attribution="&copy; OSM" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-                    ) : (
-                      <TileLayer
-                        attribution="&copy; Imagery providers"
-                        url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                      />
-                    )}
-
-                    {FLOAT_IDS.map((id, idx) => {
-                      const f = floats[id];
-                      if (f.lat == null || f.lng == null) return null;
-                      const angle = f.angleDeg ?? (Number.isFinite(f.heading) ? (f.heading as number) : 0);
-                      const pos: LatLngExpression = [f.lat, f.lng];
-
-                      const onClickMarker = () => {
-                        setSelectedId(id);
-                        setCenter({ lat: f.lat!, lng: f.lng! });
-                        setZoom(17);
-                      };
-
-                      const onDragEnd = async (e: DragEndEvent) => {
-                        if (!(editMove && selectedId === id)) return;
-                        const marker = e.target as LMarker;
-                        const ll = marker.getLatLng();
-                        await setDoc(
-                          doc(db, "floats", id),
-                          { lat: ll.lat, lng: ll.lng, updatedAt: serverTimestamp() },
-                          { merge: true }
-                        );
-                      };
-
-                      return (
-                        <Marker
-                          key={id}
-                          position={pos}
-                          icon={createShogiIcon(FLOAT_NAMES[idx], angle)}
-                          draggable={editMove && selectedId === id}
-                          eventHandlers={{ click: onClickMarker, dragend: onDragEnd }}
-                        >
-                          <Popup>
-                            <div className="text-sm">
-                              <div className="font-semibold mb-1">{f.name}</div>
-                              <RotateEditor id={id} db={db} current={f.angleDeg ?? undefined} fallbackHeading={f.heading ?? undefined} />
-                            </div>
-                          </Popup>
-                        </Marker>
-                      );
-                    })}
-                  </MapContainer>
+                  <MapView
+                    db={db}
+                    floats={floats}
+                    floatNames={FLOAT_NAMES}
+                    floatIds={FLOAT_IDS}
+                    basemap={basemap}
+                    center={center}
+                    zoom={zoom}
+                    editMove={editMove}
+                    selectedId={selectedId}
+                    setSelectedId={(id) => setSelectedId(id)}
+                    setCenter={(c) => setCenter(c)}
+                    setZoom={(z) => setZoom(z)}
+                    RotateEditor={RotateEditor}
+                  />
                 </div>
               </CardContent>
             </Card>
@@ -308,8 +228,8 @@ function TrackerPanel({ db }: { db: ReturnType<typeof getFirestore> }) {
           {
             lat: latitude,
             lng: longitude,
-            heading: (typeof heading === "number" ? heading : null),
-            speed: (typeof speed === "number" ? speed : null),
+            heading: typeof heading === "number" ? heading : null,
+            speed: typeof speed === "number" ? speed : null,
             device,
             updatedAt: serverTimestamp(),
           },
